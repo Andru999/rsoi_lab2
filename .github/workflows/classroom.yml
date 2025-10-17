@@ -1,75 +1,50 @@
 name: GitHub Classroom Workflow
-
 on:
   push:
-    branches: [main, develop, deploy2]
+    branches:
+      - master
   pull_request:
-    branches: [main, develop, deploy2]
-
+    branches:
+      - master
 jobs:
-  unit-tests:
-    name: Run unit tests
+  build:
+    name: Autograding
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Set up Python 3.10
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+      - uses: docker/setup-buildx-action@v2
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      # TODO build and run unit tests
 
-      - name: Run unit tests
+      - name: Build images
+        timeout-minutes: 10
+        run: docker compose build
+
+      - name: Run containers
+        timeout-minutes: 5
         run: |
-          pytest -vs ticket_service/app/unit_tests/ticket.py
-          pytest -vs flight_service/app/unit_tests/flight.py
+          docker compose up -d
+          ./scripts/wait-script.sh
+        env:
+          WAIT_PORTS: 8080,8070,8060,8050
 
-  deploy:
-    name: Deploy to local Windows via SSH
-    needs: [unit-tests]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Run API Tests
+        uses: matt-ball/newman-action@master
         with:
-          fetch-depth: 0
+          # TODO insert your variant
+          collection: v1/postman/collection.json
+          environment: v1/postman/environment.json
+          delayRequest: 100
+          reporters: '[ "cli" ]'
 
-      - name: Copy project to local machine
-        uses: appleboy/scp-action@v0.1.4
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          source: "."
-          target: "C:/Users/${{ secrets.SSH_USERNAME }}/rsoi_lab2"
+      - uses: education/autograding@v1
+        id: autograder
+        continue-on-error: true
 
-      - name: Run docker-compose on local machine
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          script: |
-            cd "C:/Users/${{ secrets.SSH_USERNAME }}/rsoi_lab2/docker-compose"
-            docker-compose down || echo "No containers running"
-            docker-compose up -d --build
-
-  autograding:
-    name: Run API tests
-    needs: [deploy]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Run Postman API tests
-        run: |
-          npm install -g newman
-          newman run v1/postman/collection.json -e v1/postman/environment.json --delay-request 100 --reporters cli
+      - name: Stop containers
+        if: always()
+        continue-on-error: true
+        run: docker compose down -v
